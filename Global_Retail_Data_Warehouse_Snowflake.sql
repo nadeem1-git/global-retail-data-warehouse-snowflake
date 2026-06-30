@@ -1,0 +1,438 @@
+/*=========================================================
+STEP 1 - CREATE WAREHOUSE
+=========================================================*/
+
+CREATE OR REPLACE WAREHOUSE RETAIL_WH
+WITH
+WAREHOUSE_SIZE = 'XSMALL'
+AUTO_SUSPEND = 60
+AUTO_RESUME = TRUE
+INITIALLY_SUSPENDED = TRUE;
+
+USE WAREHOUSE RETAIL_WH;
+
+
+/*=========================================================
+STEP 2 - CREATE DATABASE
+=========================================================*/
+
+CREATE OR REPLACE DATABASE RETAIL_DWH;
+
+USE DATABASE RETAIL_DWH;
+
+
+/*=========================================================
+STEP 3 - CREATE SCHEMAS
+=========================================================*/
+
+CREATE OR REPLACE SCHEMA RAW;
+
+CREATE OR REPLACE SCHEMA STAGING;
+
+CREATE OR REPLACE SCHEMA WAREHOUSE;
+
+CREATE OR REPLACE SCHEMA ANALYTICS;
+
+
+/*=========================================================
+STEP 4 - CREATE FILE FORMAT
+=========================================================*/
+
+USE SCHEMA RAW;
+
+CREATE OR REPLACE FILE FORMAT CSV_FORMAT
+TYPE = CSV
+FIELD_DELIMITER = ','
+SKIP_HEADER = 1
+FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+NULL_IF = ('NULL','null','')
+EMPTY_FIELD_AS_NULL = TRUE;
+
+
+/*=========================================================
+STEP 5 - CREATE INTERNAL STAGE
+=========================================================*/
+
+CREATE OR REPLACE STAGE RAW_STAGE
+FILE_FORMAT = CSV_FORMAT;
+
+
+/*=========================================================
+STEP 6 - UPLOAD CSV
+=========================================================*/
+
+-- Upload the superstore.csv file to RAW_STAGE
+-- Snowsight:
+-- Data → Database → RAW → Stages → RAW_STAGE → Upload Files
+
+
+/*=========================================================
+STEP 7 - VERIFY FILE
+=========================================================*/
+
+LIST @RAW_STAGE;
+
+
+/*=========================================================
+STEP 8 - CREATE RAW TABLE
+=========================================================*/
+
+CREATE OR REPLACE TABLE RAW_SUPERSTORE (
+
+CATEGORY STRING,
+
+CITY STRING,
+
+COUNTRY STRING,
+
+CUSTOMER_ID STRING,
+
+CUSTOMER_NAME STRING,
+
+DISCOUNT FLOAT,
+
+MARKET STRING,
+
+RECORD_COUNT NUMBER,
+
+ORDER_DATE VARCHAR,
+
+ORDER_ID STRING,
+
+ORDER_PRIORITY STRING,
+
+PRODUCT_ID STRING,
+
+PRODUCT_NAME STRING,
+
+PROFIT FLOAT,
+
+QUANTITY NUMBER,
+
+REGION STRING,
+
+ROW_ID NUMBER,
+
+SALES FLOAT,
+
+SEGMENT STRING,
+
+SHIP_DATE VARCHAR,
+
+SHIP_MODE STRING,
+
+SHIPPING_COST FLOAT,
+
+STATE STRING,
+
+SUB_CATEGORY STRING,
+
+POSTAL_CODE STRING,
+
+YEAR NUMBER,
+
+MARKET2 STRING,
+
+WEEKNUM NUMBER
+
+);
+
+
+/*=========================================================
+STEP 9 - LOAD DATA
+=========================================================*/
+
+COPY INTO RAW_SUPERSTORE
+FROM @RAW_STAGE/superstore.csv
+FILE_FORMAT = (FORMAT_NAME = CSV_FORMAT);
+
+
+/*=========================================================
+STEP 10 - VERIFY LOAD
+=========================================================*/
+
+SELECT COUNT(*)
+FROM RAW_SUPERSTORE;
+
+SELECT *
+FROM RAW_SUPERSTORE
+LIMIT 10;
+
+
+/*=========================================================
+STEP 11 - CREATE STAGING TABLE
+=========================================================*/
+
+USE SCHEMA STAGING;
+
+CREATE OR REPLACE TABLE STG_SUPERSTORE AS
+
+SELECT *
+
+FROM RAW.RAW_SUPERSTORE;
+
+
+/*=========================================================
+STEP 12 - CREATE DIMENSION TABLES
+=========================================================*/
+
+USE SCHEMA WAREHOUSE;
+
+CREATE OR REPLACE TABLE DIM_CUSTOMER AS
+
+SELECT DISTINCT
+
+CUSTOMER_ID,
+
+CUSTOMER_NAME,
+
+SEGMENT
+
+FROM STAGING.STG_SUPERSTORE;
+
+
+
+CREATE OR REPLACE TABLE DIM_PRODUCT AS
+
+SELECT DISTINCT
+
+PRODUCT_ID,
+
+PRODUCT_NAME,
+
+CATEGORY,
+
+SUB_CATEGORY
+
+FROM STAGING.STG_SUPERSTORE;
+
+
+
+CREATE OR REPLACE TABLE DIM_LOCATION AS
+
+SELECT DISTINCT
+
+COUNTRY,
+
+MARKET,
+
+REGION,
+
+STATE,
+
+CITY
+
+FROM STAGING.STG_SUPERSTORE;
+
+
+/*=========================================================
+STEP 13 - CREATE FACT TABLE
+=========================================================*/
+
+CREATE OR REPLACE TABLE FACT_SALES AS
+
+SELECT
+
+ROW_ID,
+
+ORDER_ID,
+
+ORDER_DATE,
+
+SHIP_DATE,
+
+CUSTOMER_ID,
+
+PRODUCT_ID,
+
+COUNTRY,
+
+MARKET,
+
+REGION,
+
+STATE,
+
+CITY,
+
+SALES,
+
+QUANTITY,
+
+DISCOUNT,
+
+PROFIT,
+
+SHIPPING_COST,
+
+ORDER_PRIORITY
+
+FROM STAGING.STG_SUPERSTORE;
+
+
+/*=========================================================
+STEP 14 - CREATE ANALYTICS VIEWS
+=========================================================*/
+
+USE SCHEMA ANALYTICS;
+
+CREATE OR REPLACE VIEW VW_SALES_SUMMARY AS
+
+SELECT
+
+YEAR(ORDER_DATE) AS SALES_YEAR,
+
+SUM(SALES) AS TOTAL_SALES,
+
+SUM(PROFIT) AS TOTAL_PROFIT,
+
+SUM(QUANTITY) AS TOTAL_QUANTITY
+
+FROM WAREHOUSE.FACT_SALES
+
+GROUP BY YEAR(ORDER_DATE);
+
+
+
+CREATE OR REPLACE VIEW VW_CATEGORY_PERFORMANCE AS
+
+SELECT
+
+P.CATEGORY,
+
+SUM(F.SALES) TOTAL_SALES,
+
+SUM(F.PROFIT) TOTAL_PROFIT,
+
+SUM(F.QUANTITY) TOTAL_QUANTITY
+
+FROM WAREHOUSE.FACT_SALES F
+
+JOIN WAREHOUSE.DIM_PRODUCT P
+
+ON F.PRODUCT_ID=P.PRODUCT_ID
+
+GROUP BY P.CATEGORY;
+
+
+
+CREATE OR REPLACE VIEW VW_CUSTOMER_PERFORMANCE AS
+
+SELECT
+
+C.CUSTOMER_NAME,
+
+SUM(F.SALES) TOTAL_SALES,
+
+SUM(F.PROFIT) TOTAL_PROFIT
+
+FROM WAREHOUSE.FACT_SALES F
+
+JOIN WAREHOUSE.DIM_CUSTOMER C
+
+ON F.CUSTOMER_ID=C.CUSTOMER_ID
+
+GROUP BY C.CUSTOMER_NAME;
+
+
+/*=========================================================
+STEP 15 - BUSINESS ANALYSIS QUERIES
+=========================================================*/
+
+-- Total Sales
+SELECT SUM(SALES) AS TOTAL_SALES
+FROM WAREHOUSE.FACT_SALES;
+
+-- Total Profit
+SELECT SUM(PROFIT) AS TOTAL_PROFIT
+FROM WAREHOUSE.FACT_SALES;
+
+-- Sales by Category
+SELECT
+CATEGORY,
+SUM(SALES) TOTAL_SALES
+FROM WAREHOUSE.DIM_PRODUCT P
+JOIN WAREHOUSE.FACT_SALES F
+ON P.PRODUCT_ID=F.PRODUCT_ID
+GROUP BY CATEGORY
+ORDER BY TOTAL_SALES DESC;
+
+-- Sales by Country
+SELECT
+COUNTRY,
+SUM(SALES) TOTAL_SALES
+FROM WAREHOUSE.FACT_SALES
+GROUP BY COUNTRY
+ORDER BY TOTAL_SALES DESC;
+
+-- Sales by Market
+SELECT
+MARKET,
+SUM(SALES) TOTAL_SALES
+FROM WAREHOUSE.FACT_SALES
+GROUP BY MARKET
+ORDER BY TOTAL_SALES DESC;
+
+-- Top 10 Customers
+SELECT
+CUSTOMER_ID,
+SUM(SALES) TOTAL_SALES
+FROM WAREHOUSE.FACT_SALES
+GROUP BY CUSTOMER_ID
+ORDER BY TOTAL_SALES DESC
+LIMIT 10;
+
+-- Top 10 Products
+SELECT
+PRODUCT_ID,
+SUM(SALES) TOTAL_SALES
+FROM WAREHOUSE.FACT_SALES
+GROUP BY PRODUCT_ID
+ORDER BY TOTAL_SALES DESC
+LIMIT 10;
+
+-- Monthly Sales
+SELECT
+YEAR(ORDER_DATE) YEAR,
+MONTH(ORDER_DATE) MONTH,
+SUM(SALES) TOTAL_SALES
+FROM WAREHOUSE.FACT_SALES
+GROUP BY YEAR(ORDER_DATE),MONTH(ORDER_DATE)
+ORDER BY YEAR,MONTH;
+
+-- Shipping Mode Performance
+SELECT
+SHIP_MODE,
+SUM(SALES) TOTAL_SALES
+FROM WAREHOUSE.FACT_SALES
+GROUP BY SHIP_MODE
+ORDER BY TOTAL_SALES DESC;
+
+-- Order Priority Distribution
+SELECT
+ORDER_PRIORITY,
+COUNT(*) TOTAL_ORDERS
+FROM WAREHOUSE.FACT_SALES
+GROUP BY ORDER_PRIORITY
+ORDER BY TOTAL_ORDERS DESC;
+
+-- Average Discount
+SELECT AVG(DISCOUNT)
+FROM WAREHOUSE.FACT_SALES;
+
+-- Average Profit
+SELECT AVG(PROFIT)
+FROM WAREHOUSE.FACT_SALES;
+
+-- Profit by Region
+SELECT
+REGION,
+SUM(PROFIT) TOTAL_PROFIT
+FROM WAREHOUSE.FACT_SALES
+GROUP BY REGION
+ORDER BY TOTAL_PROFIT DESC;
+
+
+/*=========================================================
+END OF PROJECT
+=========================================================*/
